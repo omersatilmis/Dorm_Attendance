@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:provider/provider.dart';
+import '../providers/auth_provider.dart';
 import '../../../../core/widgets/app_button.dart';
 import '../../../../core/widgets/app_input_field.dart';
 import '../widgets/auth_header_widget.dart';
@@ -19,43 +20,53 @@ class _RegisterPageState extends State<RegisterPage> {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
-  bool _isLoading = false;
-  String? _errorMessage;
 
-  Future<void> _register() async {
+  String? _selectedProfileId;
+  List<Map<String, dynamic>> _availableProfiles = [];
+  bool _isLoadingProfiles = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfiles();
+  }
+
+  Future<void> _loadProfiles() async {
+    final profiles = await context
+        .read<AuthProvider>()
+        .fetchAvailableProfiles();
+    if (mounted) {
+      setState(() {
+        _availableProfiles = profiles;
+        _isLoadingProfiles = false;
+      });
+    }
+  }
+
+  Future<void> _handleRegister() async {
     if (!_formKey.currentState!.validate()) return;
     if (_passwordController.text != _confirmPasswordController.text) {
-      setState(() => _errorMessage = 'Şifreler eşleşmiyor');
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Şifreler eşleşmiyor')));
       return;
     }
 
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+    final success = await context.read<AuthProvider>().registerWithProfile(
+      profileId: _selectedProfileId!,
+      email: _emailController.text.trim(),
+      password: _passwordController.text.trim(),
+    );
 
-    try {
-      await Supabase.instance.client.auth.signUp(
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
-      );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Kayıt başarılı! Lütfen giriş yapın.')),
-        );
-        context.go('/login');
-      }
-    } on AuthException catch (e) {
-      setState(() => _errorMessage = e.message);
-    } catch (e) {
-      setState(() => _errorMessage = 'Beklenmedik bir hata oluştu');
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
+    if (success && mounted) {
+      context.go('/home');
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final authProvider = context.watch<AuthProvider>();
+
     return Scaffold(
       body: Column(
         children: [
@@ -63,7 +74,7 @@ class _RegisterPageState extends State<RegisterPage> {
             flex: 3,
             child: AuthHeaderWidget(
               title: 'Yeni Hesap',
-              subtitle: 'Aramıza katılmak için formu doldur',
+              subtitle: 'İsmini seç ve e-posta ile hesabını oluştur',
               icon: Icons.person_add_outlined,
             ),
           ),
@@ -75,8 +86,33 @@ class _RegisterPageState extends State<RegisterPage> {
                 key: _formKey,
                 child: Column(
                   children: [
-                    if (_errorMessage != null)
-                      AuthErrorWidget(message: _errorMessage!),
+                    if (authProvider.errorMessage != null)
+                      AuthErrorWidget(message: authProvider.errorMessage!),
+
+                    if (_isLoadingProfiles)
+                      const CircularProgressIndicator()
+                    else ...[
+                      DropdownButtonFormField<String>(
+                        decoration: const InputDecoration(
+                          labelText: 'Adınızı Seçin',
+                          prefixIcon: Icon(Icons.person_search),
+                          border: OutlineInputBorder(),
+                        ),
+                        value: _selectedProfileId,
+                        items: _availableProfiles.map((p) {
+                          return DropdownMenuItem<String>(
+                            value: p['id'].toString(),
+                            child: Text(p['full_name']),
+                          );
+                        }).toList(),
+                        onChanged: (val) =>
+                            setState(() => _selectedProfileId = val),
+                        validator: (v) =>
+                            v == null ? 'Lütfen isminizi seçin' : null,
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+
                     AppInputField(
                       label: 'E-posta',
                       hint: 'example@mail.com',
@@ -110,9 +146,9 @@ class _RegisterPageState extends State<RegisterPage> {
                     ),
                     const SizedBox(height: 24),
                     AppButton(
-                      text: 'Kayıt Ol',
-                      onPressed: _register,
-                      isLoading: _isLoading,
+                      text: 'Kayıt Ol ve Eşleş',
+                      onPressed: _handleRegister,
+                      isLoading: authProvider.isLoading,
                     ),
                   ],
                 ),

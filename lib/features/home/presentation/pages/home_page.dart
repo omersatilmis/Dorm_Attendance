@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 
@@ -26,20 +27,27 @@ class HomePage extends StatelessWidget {
           children: [
             Text('Hoş Geldin, ${user?['full_name'] ?? 'Kullanıcı'}'),
             Text('Rolün: ${user?['role'] ?? 'Bilinmiyor'}'),
-            const SizedBox(height: 20),
-            if (authProvider.isAnyAdmin)
-              ElevatedButton(
-                onPressed: () {
-                  // Admin işlemleri
-                },
-                child: const Text('Yönetim Paneli'),
+            const SizedBox(height: 30),
+            if (authProvider.isAnyAdmin) ...[
+              ElevatedButton.icon(
+                icon: const Icon(Icons.admin_panel_settings),
+                onPressed: () => context.push('/management'),
+                label: const Text('Yönetim Paneli'),
+                style: ElevatedButton.styleFrom(
+                  minimumSize: const Size(200, 50),
+                ),
               ),
-            const SizedBox(height: 10),
-            ElevatedButton(
-              onPressed: () {
-                // Yoklama alma sayfası
-              },
-              child: const Text('Yoklama Al'),
+              const SizedBox(height: 12),
+            ],
+            ElevatedButton.icon(
+              icon: const Icon(Icons.how_to_reg),
+              onPressed: () => context.push('/attendance'),
+              label: const Text('Yoklama Al'),
+              style: ElevatedButton.styleFrom(
+                minimumSize: const Size(200, 50),
+                backgroundColor: Colors.green.shade700,
+                foregroundColor: Colors.white,
+              ),
             ),
           ],
         ),
