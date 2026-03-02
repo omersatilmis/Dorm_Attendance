@@ -27,7 +27,6 @@ class AppInputField extends StatelessWidget {
         labelText: label,
         hintText: hint,
         prefixIcon: Icon(icon),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
       ),
       validator: validator,
     );
