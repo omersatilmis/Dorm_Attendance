@@ -1,6 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../../../auth/presentation/providers/auth_provider.dart';
+import 'package:yurt_yoklama/features/attendance/presentation/models/attendance_models.dart';
+import 'package:yurt_yoklama/features/attendance/presentation/providers/attendance_provider.dart';
+import 'package:yurt_yoklama/features/management/presentation/providers/management_provider.dart';
+import 'package:yurt_yoklama/features/auth/presentation/providers/auth_provider.dart';
+import 'package:yurt_yoklama/core/theme/app_colors.dart';
+import 'package:yurt_yoklama/core/utils/snackbar_service.dart';
+import 'package:yurt_yoklama/core/widgets/course_group_card.dart';
+import 'package:go_router/go_router.dart';
+import 'package:yurt_yoklama/app/app_routes.dart';
 
 class AttendancePage extends StatefulWidget {
   const AttendancePage({super.key});
@@ -10,168 +18,700 @@ class AttendancePage extends StatefulWidget {
 }
 
 class _AttendancePageState extends State<AttendancePage> {
-  Map<String, dynamic>? _selectedGroup;
-  List<Map<String, dynamic>> _attendanceData = [];
+  String _checkType = "MORNING";
   bool _isLoading = false;
+  bool _isSaving = false;
+  DateTime _selectedDate = DateTime.now();
+  bool _isDateExpanded = false;
 
-  Future<void> _fetchStudents(String groupId) async {
-    setState(() => _isLoading = true);
-    final students = await context.read<AuthProvider>().fetchStudentsByGroup(
-      groupId,
-    );
-    setState(() {
-      _attendanceData = students
-          .map(
-            (s) => {
-              'id': s['id'],
-              'full_name': s['full_name'],
-              'status': 'present', // Default status
-            },
-          )
-          .toList();
-      _isLoading = false;
+  // View Mode
+  DateTime? _viewModeDate;
+  Map<String, String> _readOnlyStatusMap = {};
+
+  final ScrollController _dateScrollController = ScrollController();
+
+  // Birden fazla grubu tutacak yapı
+  final List<GroupAttendanceModel> _selectedGroupsData = [];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadAllGroupsWithStudents();
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (mounted && _dateScrollController.hasClients) {
+          _dateScrollController.animateTo(
+            _dateScrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
+      });
     });
   }
 
-  void _updateStatus(int index, String status) {
-    setState(() {
-      _attendanceData[index]['status'] = status;
+  @override
+  void dispose() {
+    _dateScrollController.dispose();
+    for (var g in _selectedGroupsData) {
+      g.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _loadAllGroupsWithStudents() async {
+    setState(() => _isLoading = true);
+    final auth = context.read<AuthProvider>();
+    final management = context.read<ManagementProvider>();
+
+    await management.loadClassGroups();
+    final groups = management.groups ?? [];
+
+    final teacherProfile = auth.userProfile;
+
+    final myGroups = auth.isAnyAdmin
+        ? groups
+        : groups.where((g) => g.teacherId == teacherProfile?['id']).toList();
+
+    // Öncekileri temizle (dispose önemli)
+    for (var g in _selectedGroupsData) {
+      g.dispose();
+    }
+    _selectedGroupsData.clear();
+
+    // Tüm grupların öğrencilerini PARALEL olarak çek (Future.wait)
+    final futures = myGroups.map((group) async {
+      await management.loadStudentsForGroup(group.id);
+      final students = management.getStudentsForGroup(group.id) ?? [];
+
+      final studentModels = students
+          .map(
+            (s) => StudentAttendanceModel(
+              id: s.id,
+              fullName: s.fullName,
+              initialStatus: 'UNSET',
+            ),
+          )
+          .toList();
+      return GroupAttendanceModel(group: group, students: studentModels);
     });
+
+    final results = await Future.wait(futures);
+    _selectedGroupsData.addAll(results);
+
+    if (mounted) {
+      setState(() => _isLoading = false);
+    }
   }
 
   Future<void> _saveAll() async {
-    if (_selectedGroup == null) return;
+    if (_selectedGroupsData.isEmpty) return;
 
+    setState(() => _isSaving = true);
+
+    final provider = context.read<AttendanceProvider>();
     final auth = context.read<AuthProvider>();
-    int successCount = 0;
+    final currentUserId = auth.userProfile?['id'];
 
-    for (var record in _attendanceData) {
-      final success = await auth.saveAttendance(
-        studentId: record['id'],
-        groupId: _selectedGroup!['id'],
-        status: record['status'],
-      );
-      if (success) successCount++;
+    final existingIds = await provider.getAttendanceRecordIds(
+      date: _selectedDate,
+      checkType: _checkType,
+    );
+
+    if (!mounted) {
+      setState(() => _isSaving = false);
+      return;
     }
 
-    if (mounted) {
-      if (Navigator.canPop(context)) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('$successCount öğrencinin yoklaması kaydedildi.'),
-          ),
-        );
+    // Toplu veri setini hazırla
+    final List<Map<String, dynamic>> records = [];
+    final dateStr = _selectedDate.toIso8601String().split('T')[0];
+
+    for (var groupData in _selectedGroupsData) {
+      final groupId = groupData.group.id;
+      for (var student in groupData.students) {
+        if (student.status == 'UNSET') continue;
+
+        final status = student.status == 'PRESENT'
+            ? 'present'
+            : student.status == 'EXCUSED'
+            ? 'excused'
+            : 'absent';
+
+        final record = <String, dynamic>{
+          'student_id': student.id,
+          'group_id': groupId,
+          'status': status,
+          'attendance_date': dateStr,
+          'check_type': _checkType.toLowerCase(), // 'morning' or 'night'
+        };
+
+        // Eğer bu kayıt önceden varsa (ID'si varsa), ID'yi de ekle ki UPDATE (Upsert) yapsın
+        final existingId = existingIds[student.id];
+        if (existingId != null) {
+          record['id'] = existingId;
+        }
+
+        if (currentUserId != null) {
+          record['recorded_by'] = currentUserId;
+        }
+        records.add(record);
       }
+    }
+
+    if (records.isEmpty) {
+      setState(() => _isSaving = false);
+      return;
+    }
+
+    if (!mounted) return;
+
+    // TEK BİR İSTEKLE GÖNDER! (BATCH SAVE)
+    final success = await context
+        .read<AttendanceProvider>()
+        .saveBatchAttendance(records);
+    final totalCount = records.length;
+    final successCount = success ? totalCount : 0;
+
+    setState(() => _isSaving = false);
+
+    if (mounted) {
+      if (successCount == totalCount && totalCount > 0) {
+        SnackbarService.showSuccess(
+          context,
+          '$successCount / $totalCount yoklama kaydedildi ✅',
+        );
+      } else if (successCount > 0) {
+        SnackbarService.showInfo(
+          context,
+          '$successCount / $totalCount yoklama kaydedildi ⚠️',
+        );
+      } else {
+        SnackbarService.showError(context, 'Yoklama kaydedilemedi');
+      }
+    }
+  }
+
+  Future<void> _fetchPastAttendance() async {
+    if (_viewModeDate == null) return;
+
+    final provider = context.read<AttendanceProvider>();
+    final statusMap = await provider.getAttendanceRecords(
+      date: _viewModeDate!,
+      checkType: _checkType,
+    );
+
+    if (mounted) {
+      // Small delay to ensure the UI properly resets before applying new map
+      // This is crucial for cached instant returns so the build cycle doesn't miss the map update.
+      setState(() {
+        _readOnlyStatusMap = {};
+      });
+      Future.microtask(() {
+        if (mounted) {
+          setState(() {
+            _readOnlyStatusMap = statusMap;
+          });
+        }
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final auth = context.read<AuthProvider>();
-    final teacherProfile = auth.userProfile;
+    final userName = auth.userProfile?['full_name'] ?? 'Bilinmiyor';
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Yoklama Al')),
-      body: Column(
-        children: [
-          // Grup Seçimi
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: FutureBuilder<List<Map<String, dynamic>>>(
-              future: auth
-                  .fetchClassGroups(), // Aslında sadece hocanın grupları olmalı
-              builder: (context, snapshot) {
-                final allGroups = snapshot.data ?? [];
-                // Sadece bu hocaya ait grupları filtreleyelim (Admin değilse)
-                final myGroups = auth.isAnyAdmin
-                    ? allGroups
-                    : allGroups
-                          .where(
-                            (g) => g['teacher_id'] == teacherProfile?['id'],
-                          )
-                          .toList();
-
-                return DropdownButton<Map<String, dynamic>>(
-                  isExpanded: true,
-                  hint: const Text('Ders Grubu Seçin'),
-                  value: _selectedGroup,
-                  items: myGroups
-                      .map(
-                        (g) =>
-                            DropdownMenuItem(value: g, child: Text(g['name'])),
-                      )
-                      .toList(),
-                  onChanged: (val) {
-                    setState(() => _selectedGroup = val);
-                    if (val != null) _fetchStudents(val['id']);
-                  },
-                );
-              },
+      appBar: AppBar(
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              "Yoklama Paneli",
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20),
             ),
-          ),
-
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _selectedGroup == null
-                ? const Center(child: Text('Lütfen bir grup seçin'))
-                : _attendanceData.isEmpty
-                ? const Center(child: Text('Bu grupta öğrenci bulunamadı.'))
-                : ListView.builder(
-                    itemCount: _attendanceData.length,
-                    itemBuilder: (context, index) {
-                      final student = _attendanceData[index];
-                      return Card(
-                        margin: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 4,
-                        ),
-                        child: ListTile(
-                          title: Text(student['full_name']),
-                          trailing: SegmentedButton<String>(
-                            segments: const [
-                              ButtonSegment(
-                                value: 'present',
-                                label: Text('V'),
-                                tooltip: 'Var',
-                              ),
-                              ButtonSegment(
-                                value: 'absent',
-                                label: Text('Y'),
-                                tooltip: 'Yok',
-                              ),
-                              ButtonSegment(
-                                value: 'late',
-                                label: Text('G'),
-                                tooltip: 'Geç',
-                              ),
-                            ],
-                            selected: {student['status']},
-                            onSelectionChanged: (Set<String> newSelection) {
-                              _updateStatus(index, newSelection.first);
-                            },
-                            showSelectedIcon: false,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-
-          if (_selectedGroup != null && _attendanceData.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: ElevatedButton(
-                onPressed: _saveAll,
-                style: ElevatedButton.styleFrom(
-                  minimumSize: const Size(double.infinity, 50),
-                  backgroundColor: Colors.green,
-                  foregroundColor: Colors.white,
-                ),
-                child: const Text('Yoklamayı Kaydet'),
+            Text(
+              "Yoklamayı Alan: $userName",
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppColors.darkTextSecondary,
               ),
             ),
+          ],
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: 'Geçmiş & Performans',
+            onPressed: () {
+              context.go(AppRoutes.attendancePerformance);
+            },
+          ),
         ],
+      ),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          // Responsive padding: dar ekran 12, normal 16, tablet 24
+          final horizontalPadding = constraints.maxWidth < 360
+              ? 12.0
+              : constraints.maxWidth > 600
+              ? 24.0
+              : 16.0;
+
+          return Padding(
+            padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 8),
+                // GECMIS TARIHLER SCROLL
+                _buildPastDaysList(),
+                const SizedBox(height: 12),
+
+                // TARİH SEÇİMİ (Yalnızca Kayıt Modunda)
+                if (_viewModeDate == null) ...[
+                  _buildDateSelector(),
+                  const SizedBox(height: 12),
+                ],
+
+                // SABAH - YAT YOKLAMASI FİLTRE ÇİPLERİ
+                Row(
+                  children: [
+                    _buildFilterChip(
+                      label: "Sabah Yoklaması",
+                      icon: Icons.wb_sunny_outlined,
+                      isSelected: _checkType == "MORNING",
+                      onTap: () {
+                        setState(() => _checkType = "MORNING");
+                        if (_viewModeDate != null) _fetchPastAttendance();
+                      },
+                    ),
+                    const SizedBox(width: 10),
+                    _buildFilterChip(
+                      label: "Yat Yoklaması",
+                      icon: Icons.nightlight_outlined,
+                      isSelected: _checkType == "NIGHT",
+                      onTap: () {
+                        setState(() => _checkType = "NIGHT");
+                        if (_viewModeDate != null) _fetchPastAttendance();
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Divider(
+                  height: 1,
+                  color: AppColors.darkSurfaceContainer.withValues(alpha: 0.5),
+                ),
+                const SizedBox(height: 12),
+
+                // KARTLARIN LİSTESİ
+                Expanded(
+                  child: _isLoading
+                      ? const Center(
+                          child: CircularProgressIndicator(
+                            color: AppColors.primary,
+                          ),
+                        )
+                      : _selectedGroupsData.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.group_off_outlined,
+                                size: 64,
+                                color: AppColors.darkTextSecondary.withValues(
+                                  alpha: 0.4,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              const Text(
+                                'Sorumlu olduğunuz bir ders grubu yok',
+                                style: TextStyle(
+                                  color: AppColors.darkTextSecondary,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : ListView.builder(
+                          padding: const EdgeInsets.only(bottom: 16),
+                          itemCount: _selectedGroupsData.length,
+                          itemBuilder: (context, groupIndex) {
+                            final data = _selectedGroupsData[groupIndex];
+
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: CourseGroupCard(
+                                groupData: data,
+                                isReadOnly: _viewModeDate != null,
+                                readOnlyStatusMap: _readOnlyStatusMap,
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+
+      // ALTTAKİ BÜYÜK KAYDET BUTONU
+      bottomNavigationBar:
+          _selectedGroupsData.isNotEmpty && _viewModeDate == null
+          ? SafeArea(
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                decoration: BoxDecoration(
+                  color: AppColors.darkSurface,
+                  border: Border(
+                    top: BorderSide(
+                      color: AppColors.darkSurfaceContainer.withValues(
+                        alpha: 0.5,
+                      ),
+                    ),
+                  ),
+                ),
+                child: ElevatedButton(
+                  onPressed: _isSaving ? null : _saveAll,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                    minimumSize: const Size.fromHeight(52),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    disabledBackgroundColor: AppColors.primary.withValues(
+                      alpha: 0.5,
+                    ),
+                  ),
+                  child: _isSaving
+                      ? const SizedBox(
+                          height: 22,
+                          width: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text(
+                          "KAYDET",
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                ),
+              ),
+            )
+          : null,
+    );
+  }
+
+  // --- TÜRKÇE TARİH ---
+  static const _turkishDays = [
+    'Pazartesi',
+    'Salı',
+    'Çarşamba',
+    'Perşembe',
+    'Cuma',
+    'Cumartesi',
+    'Pazar',
+  ];
+  static const _turkishMonths = [
+    '',
+    'Ocak',
+    'Şubat',
+    'Mart',
+    'Nisan',
+    'Mayıs',
+    'Haziran',
+    'Temmuz',
+    'Ağustos',
+    'Eylül',
+    'Ekim',
+    'Kasım',
+    'Aralık',
+  ];
+
+  String _formatTurkishDate(DateTime date) {
+    final day = date.day;
+    final month = _turkishMonths[date.month];
+    final weekday = _turkishDays[date.weekday - 1];
+    return '$day $month $weekday';
+  }
+
+  bool _isSameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  String _formatShortDate(DateTime date) {
+    final day = date.day;
+    final month = _turkishMonths[date.month].substring(0, 3);
+    final weekday = _turkishDays[date.weekday - 1].substring(0, 3);
+    return '$day $month $weekday';
+  }
+
+  Widget _buildPastDaysList() {
+    final today = DateTime.now();
+    // Son 14 günü oluştur (Eskiden yeniye doğru: 13 gün önce, 12 gün önce, ..., bugün)
+    final pastDays = List.generate(
+      14,
+      (i) => today.subtract(Duration(days: 13 - i)),
+    );
+
+    return SizedBox(
+      height: 44,
+      child: ListView.builder(
+        controller: _dateScrollController,
+        scrollDirection: Axis.horizontal,
+        itemCount: pastDays.length,
+        itemBuilder: (context, index) {
+          final date = pastDays[index];
+          // En sondaki eleman bugüne denk gelir (index == 13)
+          final isToday = index == pastDays.length - 1;
+
+          final isSelected = isToday
+              ? _viewModeDate == null
+              : _viewModeDate != null && _isSameDay(date, _viewModeDate!);
+
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: ChoiceChip(
+              label: Text(
+                isToday
+                    ? "Bugün ${date.day} ${_turkishMonths[date.month].substring(0, 3)}"
+                    : _formatShortDate(date),
+                style: TextStyle(
+                  color: isSelected ? Colors.white : AppColors.darkTextPrimary,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                ),
+              ),
+              selected: isSelected,
+              selectedColor: AppColors.primary,
+              backgroundColor: AppColors.darkSurfaceContainer,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(
+                  color: isSelected ? AppColors.primary : Colors.transparent,
+                ),
+              ),
+              onSelected: (selected) {
+                if (selected) {
+                  if (isToday) {
+                    setState(() {
+                      _viewModeDate = null;
+                      _readOnlyStatusMap.clear();
+                    });
+                  } else {
+                    setState(() {
+                      _viewModeDate = date;
+                    });
+                    _fetchPastAttendance();
+                  }
+                }
+              },
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildDateSelector() {
+    final today = DateTime.now();
+    // ±2 gün listesi
+    final dates = List.generate(5, (i) => today.add(Duration(days: i - 2)));
+
+    return Column(
+      children: [
+        // Ana tarih satırı — tıklanabilir
+        GestureDetector(
+          onTap: () => setState(() => _isDateExpanded = !_isDateExpanded),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: AppColors.darkSurface,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: AppColors.primary.withValues(alpha: 0.25),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.calendar_today_rounded,
+                  size: 18,
+                  color: AppColors.primary,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    _formatTurkishDate(_selectedDate),
+                    style: const TextStyle(
+                      color: AppColors.darkTextPrimary,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                AnimatedRotation(
+                  turns: _isDateExpanded ? 0.5 : 0,
+                  duration: const Duration(milliseconds: 200),
+                  child: const Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    color: AppColors.darkTextSecondary,
+                    size: 24,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        // Expand edilebilen tarih listesi
+        AnimatedCrossFade(
+          firstChild: const SizedBox.shrink(),
+          secondChild: Container(
+            margin: const EdgeInsets.only(top: 6),
+            decoration: BoxDecoration(
+              color: AppColors.darkSurface,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: AppColors.darkSurfaceContainer),
+            ),
+            child: Column(
+              children: dates.map((date) {
+                final isSelected = _isSameDay(date, _selectedDate);
+                final isToday = _isSameDay(date, today);
+                return InkWell(
+                  onTap: () {
+                    setState(() {
+                      _selectedDate = date;
+                      _isDateExpanded = false;
+                    });
+                  },
+                  borderRadius: BorderRadius.circular(14),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    decoration: BoxDecoration(
+                      color: isSelected
+                          ? AppColors.primary.withValues(alpha: 0.1)
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _formatTurkishDate(date),
+                            style: TextStyle(
+                              color: isSelected
+                                  ? AppColors.primary
+                                  : AppColors.darkTextPrimary,
+                              fontWeight: isSelected
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                        if (isToday)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.primary.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Text(
+                              'Bugün',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: AppColors.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        if (isSelected)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 8),
+                            child: Icon(
+                              Icons.check_circle,
+                              color: AppColors.primary,
+                              size: 18,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          crossFadeState: _isDateExpanded
+              ? CrossFadeState.showSecond
+              : CrossFadeState.showFirst,
+          duration: const Duration(milliseconds: 200),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFilterChip({
+    required String label,
+    required IconData icon,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? AppColors.primary.withValues(alpha: 0.15)
+                : AppColors.darkSurfaceContainer.withValues(alpha: 0.5),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isSelected
+                  ? AppColors.primary.withValues(alpha: 0.4)
+                  : Colors.transparent,
+            ),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 18,
+                color: isSelected
+                    ? AppColors.primary
+                    : AppColors.darkTextSecondary,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                  color: isSelected
+                      ? AppColors.primary
+                      : AppColors.darkTextSecondary,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
