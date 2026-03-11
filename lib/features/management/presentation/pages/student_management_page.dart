@@ -118,7 +118,7 @@ class _StudentManagementPageState extends State<StudentManagementPage> {
                   maxLines: 5,
                   decoration: InputDecoration(
                     labelText: 'Öğrenci Adı Soyadı',
-                    hintText: 'Örn:\nAli Demir\nAyşe Yılmaz',
+                    hintText: 'Örn:\nAhmet Hilmi Manyas\nMustafa Salih Öztürk',
                     prefixIcon: const Icon(
                       Icons.badge_outlined,
                       color: AppColors.darkTextSecondary,

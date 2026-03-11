@@ -117,7 +117,7 @@ class _GroupManagementPageState extends State<GroupManagementPage> {
                   style: const TextStyle(color: AppColors.darkTextPrimary),
                   decoration: InputDecoration(
                     labelText: 'Grup Adı',
-                    hintText: 'Örn: 1-A Sınıfı',
+                    hintText: 'Örn: Tekamül Altı',
                     prefixIcon: const Icon(
                       Icons.class_outlined,
                       color: AppColors.darkTextSecondary,
