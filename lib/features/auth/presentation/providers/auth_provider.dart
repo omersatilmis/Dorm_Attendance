@@ -1,8 +1,11 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../domain/services/auth_service.dart';
 
 class AuthProvider extends ChangeNotifier {
-  final _supabase = Supabase.instance.client;
+  final _authService = AuthService();
 
   bool _isLoading = false;
   String? _errorMessage;
@@ -11,7 +14,7 @@ class AuthProvider extends ChangeNotifier {
   // Getters
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
-  User? get currentUser => _supabase.auth.currentUser;
+  User? get currentUser => _authService.currentUser;
   Map<String, dynamic>? get userProfile => _userProfile;
 
   // Role Checks
@@ -19,16 +22,28 @@ class AuthProvider extends ChangeNotifier {
   bool get isSubAdmin => _userProfile?['role'] == 'sub_admin';
   bool get isAnyAdmin => isAdmin || isSubAdmin;
 
+  // --- SESSION RESTORE ---
+  Future<void> tryRestoreSession() async {
+    final user = _authService.currentUser;
+    if (user != null) {
+      await _fetchUserProfile(user.id);
+    } else {
+      // Offline fallback
+      final prefs = await SharedPreferences.getInstance();
+      final cachedProfile = prefs.getString('cached_user_profile');
+      if (cachedProfile != null) {
+        _userProfile = jsonDecode(cachedProfile);
+        notifyListeners();
+      }
+    }
+  }
+
   // --- FETCH AVAILABLE PROFILES FOR REGISTRATION ---
   Future<List<Map<String, dynamic>>> fetchAvailableProfiles() async {
     try {
-      final response = await _supabase
-          .from('profiles')
-          .select()
-          .eq('is_registered', false); // Kayıt olmamış hocaları çek
-
-      return List<Map<String, dynamic>>.from(response);
+      return await _authService.fetchAvailableProfiles();
     } catch (e) {
+      debugPrint('❌ fetchAvailableProfiles hatası: $e');
       _setErrorMessage("Profiller yüklenirken hata oluştu.");
       return [];
     }
@@ -40,10 +55,7 @@ class AuthProvider extends ChangeNotifier {
     _clearError();
 
     try {
-      final response = await _supabase.auth.signInWithPassword(
-        email: email,
-        password: password,
-      );
+      final response = await _authService.signIn(email, password);
 
       if (response.user != null) {
         await _fetchUserProfile(response.user!.id);
@@ -54,6 +66,7 @@ class AuthProvider extends ChangeNotifier {
       _setErrorMessage(e.message);
       return false;
     } catch (e) {
+      debugPrint('❌ login hatası: $e');
       _setErrorMessage("Beklenmedik bir hata oluştu.");
       return false;
     } finally {
@@ -71,19 +84,10 @@ class AuthProvider extends ChangeNotifier {
     _clearError();
 
     try {
-      // 1. Supabase Auth Kaydı
-      final response = await _supabase.auth.signUp(
-        email: email,
-        password: password,
-      );
+      final response = await _authService.signUp(email, password);
 
       if (response.user != null) {
-        // 2. Profile tablosunu güncelle
-        await _supabase
-            .from('profiles')
-            .update({'auth_id': response.user!.id, 'is_registered': true})
-            .eq('id', profileId);
-
+        await _authService.claimProfile(profileId, response.user!.id);
         await _fetchUserProfile(response.user!.id);
         return true;
       }
@@ -92,6 +96,7 @@ class AuthProvider extends ChangeNotifier {
       _setErrorMessage(e.message);
       return false;
     } catch (e) {
+      debugPrint('❌ register hatası: $e');
       _setErrorMessage("Kayıt hatası oluştu.");
       return false;
     } finally {
@@ -101,123 +106,53 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> _fetchUserProfile(String authId) async {
     try {
-      final data = await _supabase
-          .from('profiles')
-          .select()
-          .eq('auth_id', authId)
-          .single();
-      _userProfile = data;
+      _userProfile = await _authService.fetchProfile(authId);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('cached_user_profile', jsonEncode(_userProfile));
       notifyListeners();
     } catch (e) {
+      debugPrint('❌ _fetchUserProfile hatası: $e');
+
+      // Offline / Error fallback
+      final prefs = await SharedPreferences.getInstance();
+      final cachedProfile = prefs.getString('cached_user_profile');
+      if (cachedProfile != null) {
+        _userProfile = jsonDecode(cachedProfile);
+        _clearError(); // Don't show error if we have cached data
+        notifyListeners();
+        return;
+      }
+
       _setErrorMessage("Profil yüklenemedi.");
     }
   }
 
   // --- LOGOUT ---
   Future<void> logout() async {
-    await _supabase.auth.signOut();
+    await _authService.signOut();
     _userProfile = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('cached_user_profile');
     notifyListeners();
   }
 
-  // --- MANAGEMENT: TEACHERS ---
-  Future<List<Map<String, dynamic>>> fetchAllTeachers() async {
-    try {
-      final response = await _supabase
-          .from('profiles')
-          .select()
-          .eq('role', 'teacher');
-      return List<Map<String, dynamic>>.from(response);
-    } catch (e) {
-      return [];
-    }
-  }
+  // --- UPDATE PROFILE ---
+  Future<bool> updateProfileName(String newName) async {
+    final user = _authService.currentUser;
+    if (user == null) return false;
 
-  Future<bool> createTeacherProfile(String fullName) async {
+    _setLoading(true);
     try {
-      await _supabase.from('profiles').insert({
-        'full_name': fullName,
-        'role': 'teacher',
-        'is_registered': false,
-      });
+      await _authService.updateProfileName(user.id, newName);
+      // Reload profile to get updated data
+      await _fetchUserProfile(user.id);
       return true;
     } catch (e) {
-      _setErrorMessage("Hoca eklenemedi.");
+      debugPrint('❌ updateProfileName hatası: $e');
+      _setErrorMessage("Profil güncellenemedi.");
       return false;
-    }
-  }
-
-  // --- MANAGEMENT: CLASS GROUPS ---
-  Future<List<Map<String, dynamic>>> fetchClassGroups() async {
-    try {
-      // Teacher bilgisi ile birlikte çekelim
-      final response = await _supabase
-          .from('class_groups')
-          .select('*, profiles(full_name)');
-      return List<Map<String, dynamic>>.from(response);
-    } catch (e) {
-      return [];
-    }
-  }
-
-  Future<bool> createClassGroup(String name, String teacherId) async {
-    try {
-      await _supabase.from('class_groups').insert({
-        'name': name,
-        'teacher_id': teacherId,
-      });
-      return true;
-    } catch (e) {
-      _setErrorMessage("Grup oluşturulamadı.");
-      return false;
-    }
-  }
-
-  // --- MANAGEMENT: STUDENTS ---
-  Future<List<Map<String, dynamic>>> fetchStudentsByGroup(
-    String groupId,
-  ) async {
-    try {
-      final response = await _supabase
-          .from('students')
-          .select()
-          .eq('group_id', groupId);
-      return List<Map<String, dynamic>>.from(response);
-    } catch (e) {
-      return [];
-    }
-  }
-
-  Future<bool> addStudent(String name, String groupId) async {
-    try {
-      await _supabase.from('students').insert({
-        'full_name': name,
-        'group_id': groupId,
-      });
-      return true;
-    } catch (e) {
-      _setErrorMessage("Öğrenci eklenemedi.");
-      return false;
-    }
-  }
-
-  // --- ATTENDANCE ---
-  Future<bool> saveAttendance({
-    required String studentId,
-    required String groupId,
-    required String status,
-  }) async {
-    try {
-      await _supabase.from('attendance').upsert({
-        'student_id': studentId,
-        'group_id': groupId,
-        'status': status,
-        'attendance_date': DateTime.now().toIso8601String().split('T')[0],
-      });
-      return true;
-    } catch (e) {
-      _setErrorMessage("Yoklama kaydedilemedi.");
-      return false;
+    } finally {
+      _setLoading(false);
     }
   }
 

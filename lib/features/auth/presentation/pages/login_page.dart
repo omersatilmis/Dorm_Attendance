@@ -20,6 +20,13 @@ class _LoginPageState extends State<LoginPage> {
   final _passwordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
 
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -28,10 +35,10 @@ class _LoginPageState extends State<LoginPage> {
       _passwordController.text.trim(),
     );
 
-    if (success && mounted) {
-      // Role göre yönlendirme mantığı buraya gelecek
-      // Şimdilik ana sayfaya gitsin
-      context.go('/home');
+    if (success) {
+      if (mounted) {
+        context.go('/home');
+      }
     }
   }
 
@@ -40,63 +47,99 @@ class _LoginPageState extends State<LoginPage> {
     final authProvider = context.watch<AuthProvider>();
 
     return Scaffold(
-      body: Column(
-        children: [
-          const Expanded(
-            flex: 3,
-            child: AuthHeaderWidget(
-              title: 'Hoş Geldiniz',
-              subtitle: 'Lütfen hesabınıza giriş yapın',
-              icon: Icons.lock_outline,
-            ),
-          ),
-          Expanded(
-            flex: 5,
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24.0),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  children: [
-                    if (authProvider.errorMessage != null)
-                      AuthErrorWidget(message: authProvider.errorMessage!),
-                    AppInputField(
-                      label: 'E-posta',
-                      hint: 'example@mail.com',
-                      icon: Icons.email_outlined,
-                      controller: _emailController,
-                      validator: (v) => v == null || !v.contains('@')
-                          ? 'Geçerli bir e-posta girin'
-                          : null,
-                    ),
-                    const SizedBox(height: 16),
-                    AppInputField(
-                      label: 'Şifre',
-                      hint: '••••••••',
-                      icon: Icons.password_outlined,
-                      controller: _passwordController,
-                      isPassword: true,
-                      validator: (v) => v == null || v.length < 6
-                          ? 'En az 6 karakter girin'
-                          : null,
-                    ),
-                    const SizedBox(height: 24),
-                    AppButton(
-                      text: 'Giriş Yap',
-                      onPressed: _login,
-                      isLoading: authProvider.isLoading,
-                    ),
-                  ],
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final isLargeScreen = constraints.maxWidth > 600;
+          final headerHeight = isLargeScreen
+              ? 200.0
+              : (constraints.maxHeight * 0.35).clamp(150.0, 300.0);
+
+          Widget content = CustomScrollView(
+            slivers: [
+              SliverToBoxAdapter(
+                child: SizedBox(
+                  height: headerHeight,
+                  child: const AuthHeaderWidget(
+                    title: 'Hoş Geldiniz',
+                    subtitle: 'Lütfen hesabınıza giriş yapın',
+                    icon: Icons.lock_outline,
+                  ),
                 ),
               ),
-            ),
-          ),
-          AuthFooterWidget(
-            questionText: 'Hesabınız yok mu?',
-            actionText: 'Kayıt Ol',
-            onPressed: () => context.go('/register'),
-          ),
-        ],
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: Padding(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 400),
+                      child: Form(
+                        key: _formKey,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            if (authProvider.errorMessage != null)
+                              AuthErrorWidget(
+                                message: authProvider.errorMessage!,
+                              ),
+                            AppInputField(
+                              label: 'E-posta',
+                              hint: 'example@mail.com',
+                              icon: Icons.email_outlined,
+                              controller: _emailController,
+                              validator: (v) => v == null || !v.contains('@')
+                                  ? 'Geçerli bir e-posta girin'
+                                  : null,
+                            ),
+                            const SizedBox(height: 16),
+                            AppInputField(
+                              label: 'Şifre',
+                              hint: '••••••••',
+                              icon: Icons.password_outlined,
+                              controller: _passwordController,
+                              isPassword: true,
+                              validator: (v) => v == null || v.length < 6
+                                  ? 'En az 6 karakter girin'
+                                  : null,
+                            ),
+                            const SizedBox(height: 24),
+                            AppButton(
+                              text: 'Giriş Yap',
+                              onPressed: _login,
+                              isLoading: authProvider.isLoading,
+                            ),
+                            const SizedBox(height: 16),
+                            AuthFooterWidget(
+                              questionText: 'Hesabınız yok mu?',
+                              actionText: 'Kayıt Ol',
+                              onPressed: () => context.go('/register'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+
+          if (isLargeScreen) {
+            return Center(
+              child: Card(
+                margin: const EdgeInsets.all(32),
+                clipBehavior: Clip.antiAlias,
+                elevation: 8,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 800),
+                  child: content,
+                ),
+              ),
+            );
+          }
+
+          return content;
+        },
       ),
     );
   }

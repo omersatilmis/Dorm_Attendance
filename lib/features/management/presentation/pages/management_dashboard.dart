@@ -46,16 +46,15 @@ class ManagementDashboard extends StatelessWidget {
     required IconData icon,
     required VoidCallback onTap,
   }) {
+    final theme = Theme.of(context);
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: ListTile(
         contentPadding: const EdgeInsets.all(16),
         leading: CircleAvatar(
-          backgroundColor: Theme.of(
-            context,
-          ).primaryColor.withValues(alpha: 0.1),
-          child: Icon(icon, color: Theme.of(context).primaryColor),
+          backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.1),
+          child: Icon(icon, color: theme.colorScheme.primary),
         ),
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
         subtitle: Text(subtitle),

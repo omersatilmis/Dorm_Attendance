@@ -1,4 +1,8 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../domain/services/attendance_service.dart';
 
 class AttendanceProvider extends ChangeNotifier {
@@ -12,6 +16,89 @@ class AttendanceProvider extends ChangeNotifier {
 
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
+
+  int _offlineQueueCount = 0;
+  int get offlineQueueCount => _offlineQueueCount;
+
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+
+  AttendanceProvider() {
+    checkOfflineQueue();
+    _initConnectivityListener();
+  }
+
+  void _initConnectivityListener() {
+    _connectivitySubscription = Connectivity().onConnectivityChanged.listen((
+      List<ConnectivityResult> results,
+    ) {
+      if (results.isNotEmpty && !results.contains(ConnectivityResult.none)) {
+        // We got internet back
+        if (_offlineQueueCount > 0) {
+          syncOfflineAttendances();
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _connectivitySubscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> checkOfflineQueue() async {
+    final prefs = await SharedPreferences.getInstance();
+    final queueStr = prefs.getString('offline_attendance_queue');
+    if (queueStr != null) {
+      final List<dynamic> queue = jsonDecode(queueStr);
+      _offlineQueueCount = queue.length;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _addToOfflineQueue(List<Map<String, dynamic>> records) async {
+    final prefs = await SharedPreferences.getInstance();
+    final queueStr = prefs.getString('offline_attendance_queue');
+    List<dynamic> queue = [];
+    if (queueStr != null) {
+      queue = jsonDecode(queueStr);
+    }
+
+    // Filter out previously queued items for same student & checkType if desired, or just add
+    queue.addAll(records);
+
+    await prefs.setString('offline_attendance_queue', jsonEncode(queue));
+    _offlineQueueCount = queue.length;
+    notifyListeners();
+  }
+
+  Future<bool> syncOfflineAttendances() async {
+    final prefs = await SharedPreferences.getInstance();
+    final queueStr = prefs.getString('offline_attendance_queue');
+    if (queueStr == null) return true;
+
+    final List<dynamic> queue = jsonDecode(queueStr);
+    if (queue.isEmpty) return true;
+
+    _setLoading(true);
+    try {
+      final List<Map<String, dynamic>> records = queue
+          .map((e) => e as Map<String, dynamic>)
+          .toList();
+      await _attendanceService.saveBatchAttendance(records);
+
+      await prefs.remove('offline_attendance_queue');
+      _offlineQueueCount = 0;
+      _errorMessage = "Senkronizasyon başarılı!";
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _setErrorMessage("Senkronizasyon başarısız, tekrar denenecek.");
+      return false;
+    } finally {
+      _setLoading(false);
+    }
+  }
 
   Future<bool> saveAttendance({
     required String studentId,
@@ -28,8 +115,17 @@ class AttendanceProvider extends ChangeNotifier {
       _attendanceCache.clear(); // Invalidate cache on new save
       return true;
     } catch (e) {
-      _setErrorMessage("Yoklama kaydedilemedi.");
-      return false;
+      final record = {
+        'student_id': studentId,
+        'group_id': groupId,
+        'status': status,
+        'attendance_date': DateTime.now().toIso8601String().split('T')[0],
+        'check_type':
+            'morning', // default if missing, though typically not hitting this alone
+      };
+      await _addToOfflineQueue([record]);
+      _setErrorMessage("Çevrimdışı kaydedildi (Senkronizasyon bekliyor)");
+      return true;
     } finally {
       _setLoading(false);
     }
@@ -44,8 +140,9 @@ class AttendanceProvider extends ChangeNotifier {
       return true;
     } catch (e) {
       debugPrint("Toplu yoklama kaydetme hatası: $e");
-      _setErrorMessage("Toplu yoklama kaydedilemedi.");
-      return false;
+      await _addToOfflineQueue(records);
+      _setErrorMessage("Çevrimdışı kaydedildi (Senkronizasyon bekliyor)");
+      return true;
     } finally {
       _setLoading(false);
     }

@@ -33,16 +33,25 @@ class _AttendancePageState extends State<AttendancePage> {
   // Birden fazla grubu tutacak yapı
   final List<GroupAttendanceModel> _selectedGroupsData = [];
 
+  // Otomatik senkronizasyon takibi için
+  int _lastQueueCount = 0;
+
   @override
   void initState() {
     super.initState();
+    _lastQueueCount = context.read<AttendanceProvider>().offlineQueueCount;
+
+    // Senkronizasyon bittiğinde sayfayı yenilemek için dinleyici ekle
+    context.read<AttendanceProvider>().addListener(_onAttendanceProviderChange);
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadAllGroupsWithStudents();
-      Future.delayed(const Duration(milliseconds: 100), () {
+      // Gecikmeyi biraz artırdık ki liste tam render edilsin
+      Future.delayed(const Duration(milliseconds: 300), () {
         if (mounted && _dateScrollController.hasClients) {
           _dateScrollController.animateTo(
             _dateScrollController.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 300),
+            duration: const Duration(milliseconds: 500),
             curve: Curves.easeOut,
           );
         }
@@ -50,8 +59,23 @@ class _AttendancePageState extends State<AttendancePage> {
     });
   }
 
+  void _onAttendanceProviderChange() {
+    if (!mounted) return;
+    final provider = context.read<AttendanceProvider>();
+    final newCount = provider.offlineQueueCount;
+
+    // Eğer kuyruk 0'a düştüyse (senkronizasyon bittiyse) ve bugün modundaysak sayfayı yenile
+    if (_lastQueueCount > 0 && newCount == 0 && _viewModeDate == null) {
+      _loadAllGroupsWithStudents();
+    }
+    _lastQueueCount = newCount;
+  }
+
   @override
   void dispose() {
+    context.read<AttendanceProvider>().removeListener(
+      _onAttendanceProviderChange,
+    );
     _dateScrollController.dispose();
     for (var g in _selectedGroupsData) {
       g.dispose();
@@ -65,6 +89,7 @@ class _AttendancePageState extends State<AttendancePage> {
     final management = context.read<ManagementProvider>();
 
     await management.loadClassGroups();
+    if (!mounted) return;
     final groups = management.groups ?? [];
 
     final teacherProfile = auth.userProfile;
@@ -79,20 +104,32 @@ class _AttendancePageState extends State<AttendancePage> {
     }
     _selectedGroupsData.clear();
 
+    // Veritabanındaki (veya cache'deki) mevcut kayıtları çek
+    final attendanceProv = context.read<AttendanceProvider>();
+    final existingStatuses = await attendanceProv.getAttendanceRecords(
+      date: _selectedDate,
+      checkType: _checkType,
+    );
+
     // Tüm grupların öğrencilerini PARALEL olarak çek (Future.wait)
     final futures = myGroups.map((group) async {
       await management.loadStudentsForGroup(group.id);
       final students = management.getStudentsForGroup(group.id) ?? [];
 
-      final studentModels = students
-          .map(
-            (s) => StudentAttendanceModel(
-              id: s.id,
-              fullName: s.fullName,
-              initialStatus: 'UNSET',
-            ),
-          )
-          .toList();
+      final studentModels = students.map((s) {
+        final savedStatus = existingStatuses[s.id];
+        String initialStatus = 'UNSET';
+
+        if (savedStatus != null) {
+          initialStatus = savedStatus.toUpperCase(); // 'present' -> 'PRESENT'
+        }
+
+        return StudentAttendanceModel(
+          id: s.id,
+          fullName: s.fullName,
+          initialStatus: initialStatus,
+        );
+      }).toList();
       return GroupAttendanceModel(group: group, students: studentModels);
     });
 
@@ -174,24 +211,24 @@ class _AttendancePageState extends State<AttendancePage> {
     final successCount = success ? totalCount : 0;
 
     setState(() => _isSaving = false);
+    if (!mounted) return;
 
-    if (mounted) {
-      if (successCount == totalCount && totalCount > 0) {
-        SnackbarService.showSuccess(
-          context,
-          '$successCount / $totalCount yoklama kaydedildi ✅',
-        );
-      } else if (successCount > 0) {
-        SnackbarService.showInfo(
-          context,
-          '$successCount / $totalCount yoklama kaydedildi ⚠️',
-        );
-      } else {
-        SnackbarService.showError(context, 'Yoklama kaydedilemedi');
-      }
+    if (successCount == totalCount && totalCount > 0) {
+      SnackbarService.showSuccess(
+        context,
+        '$successCount / $totalCount yoklama kaydedildi ✅',
+      );
+    } else if (successCount > 0) {
+      SnackbarService.showInfo(
+        context,
+        '$successCount / $totalCount yoklama kaydedildi ⚠️',
+      );
+    } else {
+      SnackbarService.showError(context, 'Yoklama kaydedilemedi');
     }
   }
 
+  // Removed _fetchPastAttendance - it's handled by _loadAllGroupsWithStudents correctly
   Future<void> _fetchPastAttendance() async {
     if (_viewModeDate == null) return;
 
@@ -202,17 +239,8 @@ class _AttendancePageState extends State<AttendancePage> {
     );
 
     if (mounted) {
-      // Small delay to ensure the UI properly resets before applying new map
-      // This is crucial for cached instant returns so the build cycle doesn't miss the map update.
       setState(() {
-        _readOnlyStatusMap = {};
-      });
-      Future.microtask(() {
-        if (mounted) {
-          setState(() {
-            _readOnlyStatusMap = statusMap;
-          });
-        }
+        _readOnlyStatusMap = statusMap;
       });
     }
   }
@@ -241,6 +269,37 @@ class _AttendancePageState extends State<AttendancePage> {
           ],
         ),
         actions: [
+          Consumer<AttendanceProvider>(
+            builder: (context, attendance, child) {
+              if (attendance.offlineQueueCount > 0) {
+                return IconButton(
+                  icon: const Icon(
+                    Icons.cloud_upload_outlined,
+                    color: Colors.orange,
+                  ),
+                  tooltip:
+                      '${attendance.offlineQueueCount} Yoklamayı Senkronize Et',
+                  onPressed: () async {
+                    final success = await attendance.syncOfflineAttendances();
+                    if (context.mounted) {
+                      if (success) {
+                        SnackbarService.showSuccess(
+                          context,
+                          'Tüm yoklamalar senkronize edildi!',
+                        );
+                      } else {
+                        SnackbarService.showError(
+                          context,
+                          'Senkronizasyon başarısız oldu.',
+                        );
+                      }
+                    }
+                  },
+                );
+              }
+              return const SizedBox.shrink();
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.history),
             tooltip: 'Geçmiş & Performans',
@@ -252,12 +311,12 @@ class _AttendancePageState extends State<AttendancePage> {
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
-          // Responsive padding: dar ekran 12, normal 16, tablet 24
+          // Responsive padding: daha geniş görünüm için paddingleri azalttık
           final horizontalPadding = constraints.maxWidth < 360
-              ? 12.0
+              ? 8.0
               : constraints.maxWidth > 600
-              ? 24.0
-              : 16.0;
+              ? 16.0
+              : 12.0;
 
           return Padding(
             padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
@@ -284,7 +343,11 @@ class _AttendancePageState extends State<AttendancePage> {
                       isSelected: _checkType == "MORNING",
                       onTap: () {
                         setState(() => _checkType = "MORNING");
-                        if (_viewModeDate != null) _fetchPastAttendance();
+                        if (_viewModeDate != null) {
+                          _fetchPastAttendance();
+                        } else {
+                          _loadAllGroupsWithStudents();
+                        }
                       },
                     ),
                     const SizedBox(width: 10),
@@ -294,7 +357,11 @@ class _AttendancePageState extends State<AttendancePage> {
                       isSelected: _checkType == "NIGHT",
                       onTap: () {
                         setState(() => _checkType = "NIGHT");
-                        if (_viewModeDate != null) _fetchPastAttendance();
+                        if (_viewModeDate != null) {
+                          _fetchPastAttendance();
+                        } else {
+                          _loadAllGroupsWithStudents();
+                        }
                       },
                     ),
                   ],
@@ -470,6 +537,9 @@ class _AttendancePageState extends State<AttendancePage> {
       child: ListView.builder(
         controller: _dateScrollController,
         scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.only(
+          right: 32,
+        ), // Son elementin tam görünmesi için sağ padding
         itemCount: pastDays.length,
         itemBuilder: (context, index) {
           final date = pastDays[index];
@@ -508,6 +578,7 @@ class _AttendancePageState extends State<AttendancePage> {
                       _viewModeDate = null;
                       _readOnlyStatusMap.clear();
                     });
+                    _loadAllGroupsWithStudents();
                   } else {
                     setState(() {
                       _viewModeDate = date;
@@ -592,7 +663,10 @@ class _AttendancePageState extends State<AttendancePage> {
                     setState(() {
                       _selectedDate = date;
                       _isDateExpanded = false;
+                      _viewModeDate =
+                          null; // Clear view mode when selecting recording date
                     });
+                    _loadAllGroupsWithStudents();
                   },
                   borderRadius: BorderRadius.circular(14),
                   child: Container(
