@@ -37,7 +37,11 @@ class _PerformanceScreenState extends State<PerformanceScreen> {
     final teacherProfile = auth.userProfile;
     final myGroups = auth.isAnyAdmin
         ? groups
-        : groups.where((g) => g.teacherId == teacherProfile?['id']).toList();
+        : groups.where((g) {
+          final profileId = teacherProfile?['id']?.toString();
+          final groupTeacherId = g.teacherId?.toString();
+          return groupTeacherId == profileId;
+        }).toList();
 
     final data = await attendance.loadAllPerformanceData(myGroups);
 

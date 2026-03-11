@@ -94,9 +94,18 @@ class _AttendancePageState extends State<AttendancePage> {
 
     final teacherProfile = auth.userProfile;
 
+    // debugPrint("DEBUG: User Profile: $teacherProfile");
+    // debugPrint("DEBUG: Is Any Admin: ${auth.isAnyAdmin}");
+
     final myGroups = auth.isAnyAdmin
         ? groups
-        : groups.where((g) => g.teacherId == teacherProfile?['id']).toList();
+        : groups.where((g) {
+          // teacherProfile['id'] is UUID, g.teacherId is also UUID string
+          final profileId = teacherProfile?['id']?.toString();
+          final groupTeacherId = g.teacherId?.toString();
+          // debugPrint("DEBUG: Checking group ${g.name}: groupTeacherId=$groupTeacherId, profileId=$profileId");
+          return groupTeacherId == profileId;
+        }).toList();
 
     // Öncekileri temizle (dispose önemli)
     for (var g in _selectedGroupsData) {
