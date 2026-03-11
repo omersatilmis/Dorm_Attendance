@@ -54,17 +54,25 @@ class AuthHeaderWidget extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (icon != null && screenHeight > 100) ...[
+                    if (screenHeight > 100) ...[
                       Container(
                         padding: EdgeInsets.all(iconPadding),
                         decoration: BoxDecoration(
                           color: Colors.white.withValues(alpha: 0.2),
                           borderRadius: BorderRadius.circular(16),
                         ),
-                        child: Icon(icon, size: iconSize, color: Colors.white),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.asset(
+                            'assets/images/dorm_check_logo.png',
+                            height: iconSize,
+                            width: iconSize,
+                            fit: BoxFit.contain,
+                          ),
+                        ),
                       ),
                       if (!isShortScreen) const SizedBox(height: 16),
-                    ] else if (icon != null) ...[
+                    ] else ...[
                       const SizedBox(height: 10),
                     ],
                     Text(
