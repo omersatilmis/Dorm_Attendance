@@ -13,7 +13,7 @@ class ManagementService {
     final response = await _supabase
         .from('profiles')
         .select()
-        .eq('role', 'teacher');
+        .inFilter('role', ['teacher', 'admin', 'sub_admin']);
     return (response as List)
         .map((json) => TeacherModel.fromJson(json))
         .toList();
