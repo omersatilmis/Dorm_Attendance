@@ -16,9 +16,19 @@ class TeacherModel {
   });
 
   factory TeacherModel.fromJson(Map<String, dynamic> json) {
+    // Supabase Auth Join case: if json['user'] exists, take email from there
+    String authEmail = '';
+    if (json['user_data'] != null && json['user_data'] is Map) {
+      authEmail = (json['user_data']['email'] ?? '').toString();
+    } else if (json['user'] != null && json['user'] is Map) {
+      authEmail = (json['user']['email'] ?? '').toString();
+    }
+
     return TeacherModel(
       id: json['id'].toString(),
-      email: json['email'] as String? ?? '',
+      email: authEmail.isNotEmpty 
+          ? authEmail 
+          : (json['email'] ?? json['email_address'] ?? '').toString(),
       fullName: json['full_name'] as String? ?? 'İsimsiz',
       role: json['role'] as String? ?? 'TEACHER',
       createdAt: json['created_at'] != null

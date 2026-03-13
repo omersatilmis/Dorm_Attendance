@@ -18,6 +18,8 @@ class AttendancePage extends StatefulWidget {
 }
 
 class _AttendancePageState extends State<AttendancePage> {
+  late AttendanceProvider _attendanceProvider;
+
   String _checkType = "MORNING";
   bool _isLoading = false;
   bool _isSaving = false;
@@ -39,10 +41,11 @@ class _AttendancePageState extends State<AttendancePage> {
   @override
   void initState() {
     super.initState();
-    _lastQueueCount = context.read<AttendanceProvider>().offlineQueueCount;
+    _attendanceProvider = context.read<AttendanceProvider>();
+    _lastQueueCount = _attendanceProvider.offlineQueueCount;
 
     // Senkronizasyon bittiğinde sayfayı yenilemek için dinleyici ekle
-    context.read<AttendanceProvider>().addListener(_onAttendanceProviderChange);
+    _attendanceProvider.addListener(_onAttendanceProviderChange);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadAllGroupsWithStudents();
@@ -61,8 +64,7 @@ class _AttendancePageState extends State<AttendancePage> {
 
   void _onAttendanceProviderChange() {
     if (!mounted) return;
-    final provider = context.read<AttendanceProvider>();
-    final newCount = provider.offlineQueueCount;
+    final newCount = _attendanceProvider.offlineQueueCount;
 
     // Eğer kuyruk 0'a düştüyse (senkronizasyon bittiyse) ve bugün modundaysak sayfayı yenile
     if (_lastQueueCount > 0 && newCount == 0 && _viewModeDate == null) {
@@ -73,9 +75,7 @@ class _AttendancePageState extends State<AttendancePage> {
 
   @override
   void dispose() {
-    context.read<AttendanceProvider>().removeListener(
-      _onAttendanceProviderChange,
-    );
+    _attendanceProvider.removeListener(_onAttendanceProviderChange);
     _dateScrollController.dispose();
     for (var g in _selectedGroupsData) {
       g.dispose();
@@ -85,27 +85,11 @@ class _AttendancePageState extends State<AttendancePage> {
 
   Future<void> _loadAllGroupsWithStudents() async {
     setState(() => _isLoading = true);
-    final auth = context.read<AuthProvider>();
     final management = context.read<ManagementProvider>();
 
     await management.loadClassGroups();
     if (!mounted) return;
-    final groups = management.groups ?? [];
-
-    final teacherProfile = auth.userProfile;
-
-    // debugPrint("DEBUG: User Profile: $teacherProfile");
-    // debugPrint("DEBUG: Is Any Admin: ${auth.isAnyAdmin}");
-
-    final myGroups = auth.isAnyAdmin
-        ? groups
-        : groups.where((g) {
-          // teacherProfile['id'] is UUID, g.teacherId is also UUID string
-          final profileId = teacherProfile?['id']?.toString();
-          final groupTeacherId = g.teacherId?.toString();
-          // debugPrint("DEBUG: Checking group ${g.name}: groupTeacherId=$groupTeacherId, profileId=$profileId");
-          return groupTeacherId == profileId;
-        }).toList();
+    final allGroups = management.groups ?? [];
 
     // Öncekileri temizle (dispose önemli)
     for (var g in _selectedGroupsData) {
@@ -121,7 +105,7 @@ class _AttendancePageState extends State<AttendancePage> {
     );
 
     // Tüm grupların öğrencilerini PARALEL olarak çek (Future.wait)
-    final futures = myGroups.map((group) async {
+    final futures = allGroups.map((group) async {
       await management.loadStudentsForGroup(group.id);
       final students = management.getStudentsForGroup(group.id) ?? [];
 
@@ -414,7 +398,8 @@ class _AttendancePageState extends State<AttendancePage> {
                           ),
                         )
                       : ListView.builder(
-                          padding: const EdgeInsets.only(bottom: 16),
+                          padding: const EdgeInsets.only(bottom: 24),
+                          physics: const BouncingScrollPhysics(),
                           itemCount: _selectedGroupsData.length,
                           itemBuilder: (context, groupIndex) {
                             final data = _selectedGroupsData[groupIndex];

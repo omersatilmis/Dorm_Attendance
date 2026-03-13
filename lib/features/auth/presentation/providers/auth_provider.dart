@@ -87,7 +87,11 @@ class AuthProvider extends ChangeNotifier {
       final response = await _authService.signUp(email, password);
 
       if (response.user != null) {
-        await _authService.claimProfile(profileId, response.user!.id);
+        await _authService.claimProfile(
+          profileId,
+          response.user!.id,
+          email,
+        );
         await _fetchUserProfile(response.user!.id);
         return true;
       }

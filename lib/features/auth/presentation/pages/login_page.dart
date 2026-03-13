@@ -75,46 +75,48 @@ class _LoginPageState extends State<LoginPage> {
                       constraints: const BoxConstraints(maxWidth: 400),
                       child: Form(
                         key: _formKey,
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            if (authProvider.errorMessage != null)
-                              AuthErrorWidget(
-                                message: authProvider.errorMessage!,
+                        child: IntrinsicHeight(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              if (authProvider.errorMessage != null)
+                                AuthErrorWidget(
+                                  message: authProvider.errorMessage!,
+                                ),
+                              AppInputField(
+                                label: 'E-posta',
+                                hint: 'example@mail.com',
+                                icon: Icons.email_outlined,
+                                controller: _emailController,
+                                validator: (v) => v == null || !v.contains('@')
+                                    ? 'Geçerli bir e-posta girin'
+                                    : null,
                               ),
-                            AppInputField(
-                              label: 'E-posta',
-                              hint: 'example@mail.com',
-                              icon: Icons.email_outlined,
-                              controller: _emailController,
-                              validator: (v) => v == null || !v.contains('@')
-                                  ? 'Geçerli bir e-posta girin'
-                                  : null,
-                            ),
-                            const SizedBox(height: 16),
-                            AppInputField(
-                              label: 'Şifre',
-                              hint: '••••••••',
-                              icon: Icons.password_outlined,
-                              controller: _passwordController,
-                              isPassword: true,
-                              validator: (v) => v == null || v.length < 6
-                                  ? 'En az 6 karakter girin'
-                                  : null,
-                            ),
-                            const SizedBox(height: 24),
-                            AppButton(
-                              text: 'Giriş Yap',
-                              onPressed: _login,
-                              isLoading: authProvider.isLoading,
-                            ),
-                            const SizedBox(height: 16),
-                            AuthFooterWidget(
-                              questionText: 'Hesabınız yok mu?',
-                              actionText: 'Kayıt Ol',
-                              onPressed: () => context.go('/register'),
-                            ),
-                          ],
+                              const SizedBox(height: 16),
+                              AppInputField(
+                                label: 'Şifre',
+                                hint: '••••••••',
+                                icon: Icons.password_outlined,
+                                controller: _passwordController,
+                                isPassword: true,
+                                validator: (v) => v == null || v.length < 6
+                                    ? 'En az 6 karakter girin'
+                                    : null,
+                              ),
+                              const SizedBox(height: 24),
+                              AppButton(
+                                text: 'Giriş Yap',
+                                onPressed: _login,
+                                isLoading: authProvider.isLoading,
+                              ),
+                              const SizedBox(height: 16),
+                              AuthFooterWidget(
+                                questionText: 'Hesabınız yok mu?',
+                                actionText: 'Kayıt Ol',
+                                onPressed: () => context.go('/register'),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),

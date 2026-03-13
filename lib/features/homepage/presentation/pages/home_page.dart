@@ -125,88 +125,90 @@ class _HomePageState extends State<HomePage> {
             borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
           ),
           padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppColors.darkTextSecondary.withValues(alpha: 0.3),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-              const Text(
-                'Profili Düzenle',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.darkTextPrimary,
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: controller,
-                style: const TextStyle(color: AppColors.darkTextPrimary),
-                decoration: InputDecoration(
-                  labelText: 'Ad Soyad',
-                  filled: true,
-                  fillColor: AppColors.darkSurfaceContainer,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide: BorderSide.none,
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide: const BorderSide(
-                      color: AppColors.primary,
-                      width: 1.5,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: AppColors.darkTextSecondary.withValues(alpha: 0.3),
+                      borderRadius: BorderRadius.circular(2),
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 20),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size.fromHeight(50),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
+                const SizedBox(height: 20),
+                const Text(
+                  'Profili Düzenle',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.darkTextPrimary,
                   ),
                 ),
-                onPressed: () async {
-                  final newName = controller.text.trim();
-                  if (newName.isNotEmpty) {
-                    final nav = Navigator.of(sheetContext);
-                    final success = await context
-                        .read<AuthProvider>()
-                        .updateProfileName(newName);
-                    nav.pop();
-                    if (success) {
-                      if (context.mounted) {
-                        SnackbarService.showSuccess(
-                          context,
-                          'İsim güncellendi',
-                        );
-                      }
-                    } else {
-                      if (context.mounted) {
-                        SnackbarService.showError(
-                          context,
-                          'İsim güncellenemedi',
-                        );
+                const SizedBox(height: 16),
+                TextField(
+                  controller: controller,
+                  style: const TextStyle(color: AppColors.darkTextPrimary),
+                  decoration: InputDecoration(
+                    labelText: 'Ad Soyad',
+                    filled: true,
+                    fillColor: AppColors.darkSurfaceContainer,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide.none,
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: const BorderSide(
+                        color: AppColors.primary,
+                        width: 1.5,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size.fromHeight(50),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  onPressed: () async {
+                    final newName = controller.text.trim();
+                    if (newName.isNotEmpty) {
+                      final nav = Navigator.of(sheetContext);
+                      final success = await context
+                          .read<AuthProvider>()
+                          .updateProfileName(newName);
+                      nav.pop();
+                      if (success) {
+                        if (context.mounted) {
+                          SnackbarService.showSuccess(
+                            context,
+                            'İsim güncellendi',
+                          );
+                        }
+                      } else {
+                        if (context.mounted) {
+                          SnackbarService.showError(
+                            context,
+                            'İsim güncellenemedi',
+                          );
+                        }
                       }
                     }
-                  }
-                },
-                child: const Text('Kaydet'),
-              ),
-            ],
+                  },
+                  child: const Text('Kaydet'),
+                ),
+              ],
+            ),
           ),
         ),
       ),

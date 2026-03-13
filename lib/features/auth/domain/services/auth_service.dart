@@ -38,11 +38,12 @@ class AuthService {
     return List<Map<String, dynamic>>.from(response);
   }
 
-  Future<void> claimProfile(String profileId, String authId) async {
-    await _supabase
-        .from('profiles')
-        .update({'auth_id': authId, 'is_registered': true})
-        .eq('id', profileId);
+  Future<void> claimProfile(String profileId, String authId, String email) async {
+    await _supabase.from('profiles').update({
+      'auth_id': authId,
+      'is_registered': true,
+      'email': email,
+    }).eq('id', profileId);
   }
 
   Future<void> updateProfileName(String authId, String newName) async {

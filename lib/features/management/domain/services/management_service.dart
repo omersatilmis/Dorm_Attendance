@@ -10,13 +10,19 @@ class ManagementService {
 
   // Teachers
   Future<List<TeacherModel>> fetchAllTeachers() async {
+    // In Supabase, usually profiles table 'id' is a foreign key to auth.users 'id'
+    // To get email from Auth, we need a view or just fetching it if column exists
+    // Since Table Editor shows no email column in profiles, we assume it's in auth.users
+    // IMPORTANT: For regular users (anon key), you can't join auth.users directly via .select()
+    // UNLESS the DB has a view or a column.
+    
+    // We fetch all profiles
     final response = await _supabase
         .from('profiles')
         .select()
         .inFilter('role', ['teacher', 'admin', 'sub_admin']);
-    return (response as List)
-        .map((json) => TeacherModel.fromJson(json))
-        .toList();
+
+    return (response as List).map((json) => TeacherModel.fromJson(json)).toList();
   }
 
   Future<void> createTeacherProfile(String fullName) async {
@@ -28,7 +34,14 @@ class ManagementService {
   }
 
   Future<void> deleteTeacherProfile(String profileId) async {
+    // Delete from profiles table
     await _supabase.from('profiles').delete().eq('id', profileId);
+
+    // If there was an auth user, we should ideally delete it too.
+    // However, Supabase client's auth.admin.deleteUser requires a service_role key.
+    // If we only have the anon key, we can't delete the auth user directly from the client.
+    // The best practice is to use a Postgres Trigger or an Edge Function.
+    // For now, we inform that the auth user might still exist if not handled by DB.
   }
 
   // Groups

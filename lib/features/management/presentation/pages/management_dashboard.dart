@@ -8,10 +8,12 @@ class ManagementDashboard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Yönetim Paneli')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          _buildItem(
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          physics: const BouncingScrollPhysics(),
+          children: [
+            _buildItem(
             context,
             title: 'Hoca Yönetimi',
             subtitle: 'Yeni hoca ekle veya listele',
@@ -36,6 +38,7 @@ class ManagementDashboard extends StatelessWidget {
           ),
         ],
       ),
+    ),
     );
   }
 
